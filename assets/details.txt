@@ -1,0 +1,18 @@
+Role / Title
+builder of slop & systems
+
+Location
+Lucknow, India
+
+Website / Link
+github.com/abrez-rizvi
+
+Tech Stack
+Python • TypeScript • React • Node.js • Electron
+Tree-sitter • NetworkX • Markdown • YAML
+
+Key Highlights
+• building Knowiki
+• shipping in public
+• ai memory / codebase knowledge stuff
+• likes clean terminals and bad jokes
