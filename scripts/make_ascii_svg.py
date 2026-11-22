@@ -23,7 +23,7 @@ OUT = sys.argv[2] if len(sys.argv) > 2 else os.path.join(HERE, "..", "avi-ascii.
 COLS = 100
 ROWS = 53
 CELL_W = 8
-CELL_H = 15
+CELL_H = 16
 RAMP = " .`:-=+*cs#%@"  # bright(sparse) -> dark(dense); leading space clears bg
 
 # the prepped image already has bg removed + CLAHE local contrast, so only
@@ -37,7 +37,9 @@ WHITE_FLOOR = 0.80    # luminance above this is forced to blank (space)
 PAD = 20
 TITLEBAR_H = 30
 STATUS_H = 30
-BLOCK_SIZE = 100      # square grid cell size (800x1100 -> 8x11 exact squares)
+CHARS_PER_BLK = 10    # 10 * 8  = 80px wide
+LINES_PER_BLK = 5     #  5 * 16 = 80px tall
+BLOCK_SIZE = 80       # exact square aligned to character cell boundaries (no per-block clip/use)
 
 BG = "#0d1117"
 BG2 = "#111722"
@@ -47,7 +49,7 @@ INK = "#c9d1d9"      # the single ascii color (matches Andrew6rant)
 
 # ---- falling block timing (one-shot; columns rain down and stack bottom-up) -
 BASE_FALL_DUR = 0.65  # drop duration for a full-height fall
-STEP_GAP = 0.16       # delay between consecutive blocks in the same column
+STEP_GAP = 0.13       # delay between consecutive blocks in the same column
 COL_SPREAD = 0.85     # max stagger across columns
 
 TXT_SRC = os.path.join(HERE, "..", "assets", "ascii-art.txt")
@@ -85,12 +87,21 @@ else:
 
 STATIC = bool(os.environ.get("STATIC"))  # emit frozen state for previews
 
-ART_W = COLS * CELL_W
-ART_H = ROWS * CELL_H
+# Pad rows/cols cleanly to an exact grid of BLOCK_SIZE x BLOCK_SIZE squares
+GRID_COLS = math.ceil(COLS / CHARS_PER_BLK)
+GRID_ROWS = math.ceil(ROWS / LINES_PER_BLK)
+PADDED_COLS = GRID_COLS * CHARS_PER_BLK
+PADDED_ROWS = GRID_ROWS * LINES_PER_BLK
 
-# Adjust grid dimensions to hold an exact grid of BLOCK_SIZE x BLOCK_SIZE squares
-GRID_COLS = math.ceil(ART_W / BLOCK_SIZE)
-GRID_ROWS = math.ceil(ART_H / BLOCK_SIZE)
+pad_left = (PADDED_COLS - COLS) // 2
+pad_top = (PADDED_ROWS - ROWS) // 2
+pad_bottom = PADDED_ROWS - ROWS - pad_top
+padded_rows = (
+    [" " * PADDED_COLS] * pad_top
+    + [(" " * pad_left + l).ljust(PADDED_COLS) for l in rows_txt]
+    + [" " * PADDED_COLS] * pad_bottom
+)
+
 GRID_W = GRID_COLS * BLOCK_SIZE
 GRID_H = GRID_ROWS * BLOCK_SIZE
 
@@ -98,39 +109,23 @@ CANVAS_W = GRID_W + PAD * 2
 CANVAS_H = TITLEBAR_H + GRID_H + STATUS_H + PAD
 
 art_top = TITLEBAR_H + PAD * 0.35
-art_left = PAD + (GRID_W - ART_W) / 2
-art_text_top = art_top + (GRID_H - ART_H) / 2
 
 # ---- 2. assemble SVG ------------------------------------------------------
 parts = []
 parts.append(
-    f'<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" '
-    f'width="{CANVAS_W}" height="{CANVAS_H}" viewBox="0 0 {CANVAS_W} {CANVAS_H}" '
-    f'font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">'
+    f'<svg xmlns="http://www.w3.org/2000/svg" width="{CANVAS_W}" height="{CANVAS_H}" '
+    f'viewBox="0 0 {CANVAS_W} {CANVAS_H}" font-family="ui-monospace, SFMono-Regular, '
+    f'Menlo, Consolas, monospace">'
 )
-defs = [
+parts.append(
+    f'<defs>'
     f'<linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">'
     f'<stop offset="0" stop-color="{BG2}"/><stop offset="1" stop-color="{BG}"/>'
-    f'</linearGradient>',
+    f'</linearGradient>'
     f'<clipPath id="art-vp"><rect x="{PAD}" y="{art_top:.1f}" '
-    f'width="{GRID_W}" height="{GRID_H}"/></clipPath>',
-    f'<clipPath id="sq"><rect x="0" y="0" width="{BLOCK_SIZE}" height="{BLOCK_SIZE}"/></clipPath>',
-]
-
-font_size = CELL_H * 0.86
-row_bounds = []
-for ry, line in enumerate(rows_txt):
-    y = art_text_top + ry * CELL_H + CELL_H * 0.74
-    row_top = art_text_top + ry * CELL_H
-    row_bot = row_top + CELL_H
-    row_bounds.append((row_top, row_bot))
-    safe = html.escape(line)
-    defs.append(
-        f'<text id="r{ry}" xml:space="preserve" x="{art_left:.1f}" y="{y:.1f}" fill="{INK}" '
-        f'font-size="{font_size:.1f}" textLength="{ART_W}" lengthAdjust="spacing">{safe}</text>'
-    )
-
-parts.append(f'<defs>{"".join(defs)}</defs>')
+    f'width="{GRID_W}" height="{GRID_H}"/></clipPath>'
+    f'</defs>'
+)
 
 parts.append(f'<rect width="{CANVAS_W}" height="{CANVAS_H}" rx="12" fill="url(#bg)"/>')
 parts.append(f'<rect x="0.5" y="0.5" width="{CANVAS_W-1}" height="{CANVAS_H-1}" rx="12" '
@@ -142,10 +137,17 @@ for i, dotcol in enumerate(["#ff5f56", "#ffbd2e", "#27c93f"]):
 parts.append(f'<text x="{CANVAS_W/2}" y="{TITLEBAR_H/2 + 4}" fill="{TITLE_TEXT}" font-size="12" '
              f'text-anchor="middle">abrez-rizvi@github: ~$ ./portrait.sh</text>')
 
+font_size = CELL_H * 0.86
+
 if STATIC:
     parts.append('<g clip-path="url(#art-vp)">')
-    for ry in range(len(rows_txt)):
-        parts.append(f'<use href="#r{ry}" xlink:href="#r{ry}"/>')
+    for ry, line in enumerate(padded_rows):
+        y = art_top + ry * CELL_H + CELL_H * 0.74
+        parts.append(
+            f'<text xml:space="preserve" x="{PAD}" y="{y:.1f}" fill="{INK}" '
+            f'font-size="{font_size:.1f}" textLength="{GRID_W}" lengthAdjust="spacing">'
+            f'{html.escape(line)}</text>'
+        )
     parts.append('</g>')
 else:
     # Deterministic non-linear column stagger so blocks rain down organically
@@ -157,40 +159,32 @@ else:
     parts.append('<g clip-path="url(#art-vp)">')
     for gx in range(GRID_COLS):
         bx = PAD + gx * BLOCK_SIZE
+        c0 = gx * CHARS_PER_BLK
+        c1 = c0 + CHARS_PER_BLK
         # Bottom-to-top within each column so each block lands on top of the one below
         for gy in range(GRID_ROWS - 1, -1, -1):
             by = art_top + gy * BLOCK_SIZE
             stack_idx = (GRID_ROWS - 1) - gy
             fall_dist = (gy + 1) * BLOCK_SIZE
-            fall_dur = BASE_FALL_DUR * math.sqrt(fall_dist / GRID_H)
-            # Small deterministic per-block micro-jitter while preserving monotonic stack order
-            jitter = ((gx * 7 + gy * 3) % 5) * 0.012
+            fall_dur = max(0.22, BASE_FALL_DUR * math.sqrt(fall_dist / GRID_H))
+            jitter = ((gx * 7 + gy * 3) % 5) * 0.010
             t_start = col_delays[gx] + stack_idx * STEP_GAP + jitter
-            t_land = t_start + fall_dur
 
-            # Only include rows whose vertical span intersects this square block
-            uses = []
-            for ry, (r_top, r_bot) in enumerate(row_bounds):
-                if r_bot >= by - 2 and r_top <= by + BLOCK_SIZE + 2:
-                    uses.append(f'<use href="#r{ry}" xlink:href="#r{ry}"/>')
-
-            inner = (
-                f'<g transform="translate({bx:.1f},{by:.1f})" clip-path="url(#sq)">'
-                f'<g opacity="1">'
-                f'<rect width="{BLOCK_SIZE}" height="{BLOCK_SIZE}" fill="{BG}"/>'
-                f'<rect x="0.5" y="0.5" width="{BLOCK_SIZE-1}" height="{BLOCK_SIZE-1}" '
-                f'fill="none" stroke="{FRAME}" stroke-width="1" opacity="0.85"/>'
-                f'<animate attributeName="opacity" from="1" to="0" '
-                f'begin="{t_land:.3f}s" dur="0.35s" fill="freeze"/>'
-                f'</g>'
-                f'<g transform="translate({-bx:.1f},{-by:.1f})">{"".join(uses)}</g>'
-                f'</g>'
-            )
+            texts = []
+            for lr in range(LINES_PER_BLK):
+                ry = gy * LINES_PER_BLK + lr
+                ty = by + lr * CELL_H + CELL_H * 0.74
+                slice_txt = html.escape(padded_rows[ry][c0:c1])
+                texts.append(
+                    f'<text xml:space="preserve" x="{bx}" y="{ty:.1f}" fill="{INK}" '
+                    f'font-size="{font_size:.1f}" textLength="{BLOCK_SIZE}" lengthAdjust="spacing">'
+                    f'{slice_txt}</text>'
+                )
 
             parts.append(
-                f'<g transform="translate(0,{-fall_dist:.1f})">{inner}'
+                f'<g transform="translate(0,-{fall_dist})">{"".join(texts)}'
                 f'<animateTransform attributeName="transform" type="translate" '
-                f'values="0 {-fall_dist:.1f}; 0 0; 0 -3; 0 0" '
+                f'values="0 -{fall_dist}; 0 0; 0 -3; 0 0" '
                 f'keyTimes="0; 0.88; 0.95; 1" '
                 f'keySplines="0.45 0 1 0.9; 0.2 0.8 0.4 1; 0.4 0 0.8 1" '
                 f'calcMode="spline" begin="{t_start:.3f}s" dur="{fall_dur:.3f}s" fill="freeze"/>'
