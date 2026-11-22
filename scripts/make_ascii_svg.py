@@ -49,7 +49,8 @@ INK = "#c9d1d9"      # the single ascii color (matches Andrew6rant)
 BASE_FALL_DUR = 0.62
 STEP_GAP = 0.13
 COL_SPREAD = 0.85
-HOLD_BETWEEN = 0.90
+HOLD_BETWEEN = 1.10
+HOLD_END = 1.40
 CLEAR_DUR = 0.42
 
 BASE_TETROMINOES = {
@@ -240,15 +241,19 @@ def render_cell_texts(padded_rows, gx, gy, art_top, font_size):
     return "".join(texts)
 
 
-def drop_group(inner, fall_dist, t_start, fall_dur):
-    """Wrap content in a SMIL gravity-drop + settle <g>."""
+def drop_group(inner, fall_dist, t_start, fall_dur, total_dur):
+    """Wrap content in a SMIL gravity-drop + settle <g> synced to master loop."""
+    k1 = max(0.0005, t_start / total_dur)
+    k2 = (t_start + 0.88 * fall_dur) / total_dur
+    k3 = (t_start + 0.95 * fall_dur) / total_dur
+    k4 = min(0.9995, (t_start + fall_dur) / total_dur)
     return (
         f'<g transform="translate(0,-{fall_dist})">{inner}'
         f'<animateTransform attributeName="transform" type="translate" '
-        f'values="0 -{fall_dist}; 0 0; 0 -3; 0 0" '
-        f'keyTimes="0; 0.88; 0.95; 1" '
-        f'keySplines="0.45 0 1 0.9; 0.2 0.8 0.4 1; 0.4 0 0.8 1" '
-        f'calcMode="spline" begin="{t_start:.3f}s" dur="{fall_dur:.3f}s" fill="freeze"/>'
+        f'values="0 -{fall_dist}; 0 -{fall_dist}; 0 0; 0 -3; 0 0; 0 0" '
+        f'keyTimes="0; {k1:.5f}; {k2:.5f}; {k3:.5f}; {k4:.5f}; 1" '
+        f'keySplines="0 0 1 1; 0.45 0 1 0.9; 0.2 0.8 0.4 1; 0.4 0 0.8 1; 0 0 1 1" '
+        f'calcMode="spline" begin="0s" dur="{total_dur:.3f}s" repeatCount="indefinite"/>'
         f'</g>'
     )
 
@@ -355,7 +360,7 @@ else:
     for rank, col in enumerate(col_order):
         col_delays[col] = (rank / max(1, GRID_COLS - 1)) * COL_SPREAD
 
-    p1_blocks = []
+    p1_items = []
     p1_max_land = 0.0
     for gx in range(GRID_COLS):
         for gy in range(GRID_ROWS - 1, -1, -1):
@@ -363,13 +368,13 @@ else:
             fall_dist = (gy + 1) * BLOCK_SIZE
             fall_dur = max(0.22, BASE_FALL_DUR * math.sqrt(fall_dist / GRID_H))
             jitter = ((gx * 7 + gy * 3) % 5) * 0.010
-            t_start = col_delays[gx] + stack_idx * STEP_GAP + jitter
+            t_start = 0.05 + col_delays[gx] + stack_idx * STEP_GAP + jitter
             p1_max_land = max(p1_max_land, t_start + fall_dur)
             inner = render_cell_texts(padded_rows, gx, gy, art_top, font_size)
-            p1_blocks.append(drop_group(inner, fall_dist, t_start, fall_dur))
+            p1_items.append((inner, fall_dist, t_start, fall_dur))
 
-    t_clear = p1_max_land + HOLD_BETWEEN
-    t_p2 = t_clear + CLEAR_DUR
+    t_clear1 = p1_max_land + HOLD_BETWEEN
+    t_p2 = t_clear1 + CLEAR_DUR
 
     # ---- Phase 2: interlocking Tetris tetrominoes ----
     grid, pieces = tile_tetris_grid(GRID_COLS, GRID_ROWS, seed=7)
@@ -411,6 +416,13 @@ else:
         t_land_map[pid] = t_start + fall_dur
 
     p2_base = t_p2 + 0.08
+    p2_end = p2_base + max(t_land_map.values()) + 0.43
+    t_clear2 = p2_end + HOLD_END
+    t_p2_hide = t_clear2 + CLEAR_DUR
+    total_loop = t_p2_hide + 0.15
+
+    p1_blocks = [drop_group(inner, dist, ts, fd, total_loop) for inner, dist, ts, fd in p1_items]
+
     p2_blocks = []
     for pid in order_pids:
         _, name, pts = pieces[pid]
@@ -422,46 +434,65 @@ else:
         color = TETRIS_COLORS[name]
         outline = piece_outline_path(pts, PAD, art_top, BLOCK_SIZE)
         seams = inner_mino_seams(pts, PAD, art_top, BLOCK_SIZE)
+        k_fs = (t_land + 0.08) / total_loop
+        k_fe = (t_land + 0.43) / total_loop
         border_grp = (
             f'<g opacity="0.9">'
             f'<path d="{outline}" fill="{color}" fill-opacity="0.09" stroke="{color}" '
             f'stroke-width="2" stroke-linejoin="round"/>'
             + (f'<path d="{seams}" fill="none" stroke="{color}" stroke-width="1" stroke-opacity="0.32"/>' if seams else '')
-            + f'<animate attributeName="opacity" from="0.9" to="0" '
-            f'begin="{t_land + 0.08:.3f}s" dur="0.35s" fill="freeze"/></g>'
+            + f'<animate attributeName="opacity" values="0.9;0.9;0;0" '
+            f'keyTimes="0;{k_fs:.5f};{k_fe:.5f};1" '
+            f'begin="0s" dur="{total_loop:.3f}s" repeatCount="indefinite"/></g>'
         )
         texts = "".join(render_cell_texts(padded_rows, gx, gy, art_top, font_size) for gx, gy in pts)
-        p2_blocks.append(drop_group(border_grp + texts, fall_dist, t_start, fall_dur))
+        p2_blocks.append(drop_group(border_grp + texts, fall_dist, t_start, fall_dur, total_loop))
 
-    p2_end = p2_base + max(t_land_map.values()) + 0.43
+    k_c1s = t_clear1 / total_loop
+    k_p2 = t_p2 / total_loop
+    k_c2s = t_clear2 / total_loop
+    k_p2h = t_p2_hide / total_loop
 
-    # Titlebar command switches from ./portrait.sh -> ./tetris_portrait.sh
+    # Titlebar command switches between ./portrait.sh and ./tetris_portrait.sh each loop
     parts.append(
         f'<text x="{CANVAS_W/2}" y="{TITLEBAR_H/2 + 4}" fill="{TITLE_TEXT}" font-size="12" '
         f'text-anchor="middle">abrez-rizvi@github: ~$ ./portrait.sh'
-        f'<set attributeName="display" to="none" begin="{t_p2:.3f}s"/></text>'
+        f'<animate attributeName="display" values="inline;none;none" keyTimes="0;{k_p2:.5f};1" '
+        f'calcMode="discrete" begin="0s" dur="{total_loop:.3f}s" repeatCount="indefinite"/></text>'
     )
     parts.append(
         f'<text x="{CANVAS_W/2}" y="{TITLEBAR_H/2 + 4}" fill="{TITLE_TEXT}" font-size="12" '
         f'text-anchor="middle" display="none">abrez-rizvi@github: ~$ ./tetris_portrait.sh'
-        f'<set attributeName="display" to="inline" begin="{t_p2:.3f}s"/></text>'
+        f'<animate attributeName="display" values="none;inline;inline" keyTimes="0;{k_p2:.5f};1" '
+        f'calcMode="discrete" begin="0s" dur="{total_loop:.3f}s" repeatCount="indefinite"/></text>'
     )
 
     parts.append('<g clip-path="url(#art-vp)">')
     parts.append(
         f'<g>{"".join(p1_blocks)}'
         f'<animateTransform attributeName="transform" type="translate" '
-        f'from="0 0" to="0 {GRID_H}" begin="{t_clear:.3f}s" dur="{CLEAR_DUR:.3f}s" '
-        f'calcMode="spline" keySplines="0.55 0 1 1" fill="freeze"/>'
-        f'<set attributeName="display" to="none" begin="{t_p2:.3f}s"/></g>'
+        f'values="0 0; 0 0; 0 {GRID_H}; 0 {GRID_H}" '
+        f'keyTimes="0; {k_c1s:.5f}; {k_p2:.5f}; 1" '
+        f'keySplines="0 0 1 1; 0.55 0 1 1; 0 0 1 1" '
+        f'calcMode="spline" begin="0s" dur="{total_loop:.3f}s" repeatCount="indefinite"/>'
+        f'<animate attributeName="display" values="inline;none;none" keyTimes="0;{k_p2:.5f};1" '
+        f'calcMode="discrete" begin="0s" dur="{total_loop:.3f}s" repeatCount="indefinite"/></g>'
     )
     parts.append(
-        f'<g visibility="hidden">{"".join(p2_blocks)}'
-        f'<set attributeName="visibility" to="visible" begin="{t_p2:.3f}s"/></g>'
+        f'<g display="none">{"".join(p2_blocks)}'
+        f'<animateTransform attributeName="transform" type="translate" '
+        f'values="0 0; 0 0; 0 {GRID_H}; 0 {GRID_H}" '
+        f'keyTimes="0; {k_c2s:.5f}; {k_p2h:.5f}; 1" '
+        f'keySplines="0 0 1 1; 0.55 0 1 1; 0 0 1 1" '
+        f'calcMode="spline" begin="0s" dur="{total_loop:.3f}s" repeatCount="indefinite"/>'
+        f'<animate attributeName="display" values="none;inline;none;none" '
+        f'keyTimes="0;{k_p2:.5f};{k_p2h:.5f};1" '
+        f'calcMode="discrete" begin="0s" dur="{total_loop:.3f}s" repeatCount="indefinite"/></g>'
     )
     parts.append('</g>')
-    print(f"timeline: blocks 0->{p1_max_land:.2f}s, clear {t_clear:.2f}->{t_p2:.2f}s, "
-          f"tetris {p2_base:.2f}->{p2_end:.2f}s")
+    print(f"timeline (loop={total_loop:.2f}s): blocks 0.05->{p1_max_land:.2f}s, "
+          f"clear1 {t_clear1:.2f}->{t_p2:.2f}s, tetris {p2_base:.2f}->{p2_end:.2f}s, "
+          f"clear2 {t_clear2:.2f}->{t_p2_hide:.2f}s")
 
 # status bar with a steady blinking cursor
 status_line_y = TITLEBAR_H + GRID_H + PAD * 0.35
